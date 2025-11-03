@@ -6,7 +6,7 @@ class DatabaseManager:
         self.conn = psycopg2.connect(
             dbname=db_name,
             user=user,
-            password="Root",  # Ensure this is "Root" or the password used in psql
+            password="avin",  # Ensure this is "Root" or the password used in psql
             host=host,
             port=port
         )

@@ -4,6 +4,7 @@ from tabulate import tabulate
 from utils import normalize_stock_symbol, get_valid_number, review_and_confirm, format_currency, confirm_action
 from colorama import Fore, Style
 import psycopg2
+from decimal import Decimal
 
 class StockManager:
     def __init__(self, db_conn):
@@ -12,7 +13,6 @@ class StockManager:
         self.migrate_stock_transactions_dates()
 
     def get_live_price(self, symbol):
-        """Fetch the latest closing stock price from NSE."""
         symbol = normalize_stock_symbol(symbol)
         try:
             stock = yf.Ticker(symbol)
@@ -20,27 +20,28 @@ class StockManager:
             if data.empty:
                 print(f"{Fore.RED}No price data for {symbol}. Check the stock symbol.{Style.RESET_ALL}")
                 return None
-            return round(data["Close"].iloc[-1], 2)
+            return round(float(data["Close"].iloc[-1]), 2)
         except Exception as e:
             print(f"{Fore.RED}Unable to fetch price for {symbol}. Error: {e}{Style.RESET_ALL}")
             return None
 
     def buy_stock(self, user_id, symbol, quantity):
-        """Buy stocks with balance check and expense deduction, showing suggested stocks."""
         self.display_suggestions()
         symbol = input("Enter NSE stock symbol (without .NS) [RELIANCE]: ").strip().upper()
         symbol = 'RELIANCE' if not symbol else symbol
-        quantity = get_valid_number("Enter quantity [1]: ", default=1, min_value=1)
-        if quantity is None:
+        quantity_input = get_valid_number("Enter quantity [1]: ", default=1, min_value=1)
+        if quantity_input is None:
             return
+        quantity = int(quantity_input)
 
         price_choice = input("Use market price? (y/n): ").lower()
         price = self.get_live_price(symbol) if price_choice in ['', 'y'] else get_valid_number("Enter manual price (₹): ", min_value=0.01)
         if price is None:
             print(f"{Fore.RED}Unable to fetch price or invalid manual price.{Style.RESET_ALL}")
             return
+        price = float(price)
 
-        total_cost = quantity * price
+        total_cost = float(quantity * price)
         balance = self.get_balance(user_id)
         if total_cost > balance:
             print(f"{Fore.RED}Insufficient funds. Need {format_currency(total_cost)}, but balance is {format_currency(balance)}.{Style.RESET_ALL}")
@@ -64,8 +65,10 @@ class StockManager:
 
             if record:
                 pid, old_qty, old_avg = record
+                old_qty = int(old_qty)
+                old_avg = float(old_avg)
                 new_qty = old_qty + quantity
-                new_avg = ((old_qty * old_avg) + (quantity * price)) / new_qty
+                new_avg = float(((old_qty * old_avg) + (quantity * price)) / new_qty)
                 self.cursor.execute("UPDATE portfolio SET quantity=%s, avg_buy_price=%s WHERE id=%s", (new_qty, new_avg, pid))
             else:
                 self.cursor.execute("INSERT INTO portfolio (user_id, stock_symbol, quantity, avg_buy_price) VALUES (%s, %s, %s, %s)",
@@ -86,21 +89,22 @@ class StockManager:
             self.conn.rollback()
 
     def sell_stock(self, user_id, symbol, quantity):
-        """Sell stocks and credit balance with income, showing portfolio first."""
         self.view_portfolio(user_id)
         symbol = input("Enter NSE stock symbol (without .NS) [RELIANCE]: ").strip().upper()
         symbol = 'RELIANCE' if not symbol else symbol
-        quantity = get_valid_number("Enter quantity [1]: ", default=1, min_value=1)
-        if quantity is None:
+        quantity_input = get_valid_number("Enter quantity [1]: ", default=1, min_value=1)
+        if quantity_input is None:
             return
+        quantity = int(quantity_input)
 
         price_choice = input("Use latest market price? (y/n): ").lower()
         price = self.get_live_price(symbol) if price_choice in ['', 'y'] else get_valid_number("Enter manual price (₹): ", min_value=0.01)
         if price is None:
             print(f"{Fore.RED}Unable to fetch price or invalid manual price.{Style.RESET_ALL}")
             return
+        price = float(price)
 
-        total_gain = quantity * price
+        total_gain = float(quantity * price)
         date = datetime.now().strftime("%d-%m-%Y")
         symbol = normalize_stock_symbol(symbol)
 
@@ -113,6 +117,7 @@ class StockManager:
                 return
 
             pid, old_qty, avg_price = record
+            old_qty = int(old_qty)
             if quantity > old_qty:
                 print(f"{Fore.RED}You only have {old_qty} shares of {symbol}.{Style.RESET_ALL}")
                 return
@@ -147,7 +152,6 @@ class StockManager:
             self.conn.rollback()
 
     def view_portfolio(self, user_id):
-        """Display user's stock portfolio."""
         try:
             self.cursor.execute("SELECT stock_symbol, quantity, avg_buy_price FROM portfolio WHERE user_id=%s", (user_id,))
             rows = self.cursor.fetchall()
@@ -159,7 +163,10 @@ class StockManager:
             total_invested, total_current = 0, 0
 
             for symbol, qty, avg_price in rows:
+                qty = int(qty)
+                avg_price = float(avg_price)
                 live_price = self.get_live_price(symbol) or 0
+                live_price = float(live_price)
                 invested = qty * avg_price
                 current = qty * live_price
                 profit = current - invested
@@ -182,7 +189,6 @@ class StockManager:
             self.conn.rollback()
 
     def view_stock_transactions(self, user_id):
-        """Display stock transaction history."""
         try:
             self.cursor.execute("SELECT stock_symbol, transaction_type, quantity, price, date FROM stock_transactions WHERE user_id=%s ORDER BY to_date(date, 'DD-MM-YYYY') DESC", (user_id,))
             rows = self.cursor.fetchall()
@@ -193,7 +199,7 @@ class StockManager:
             formatted_rows = []
             for row in rows:
                 symbol, trans_type, qty, price, date = row
-                formatted_rows.append([symbol, trans_type, qty, format_currency(price), date])
+                formatted_rows.append([symbol, trans_type, qty, format_currency(float(price)), date])
 
             print("\n--- Stock Transaction History ---")
             print(tabulate(formatted_rows, headers=["Symbol", "Type", "Qty", "Price", "Date"], tablefmt="pretty"))
@@ -202,7 +208,6 @@ class StockManager:
             self.conn.rollback()
 
     def display_suggestions(self):
-        """Display suggested Nifty 50 stocks."""
         suggestions = [
             ["RELIANCE.NS", "Reliance Industries", 15.0],
             ["TCS.NS", "Tata Consultancy Services", 12.0],
@@ -213,7 +218,6 @@ class StockManager:
         print("Note: Estimated returns are based on historical trends and not guaranteed. Use 'Buy Stock' to invest.")
 
     def migrate_stock_transactions_dates(self):
-        """Migrate stock transaction dates to DD-MM-YYYY format."""
         try:
             self.cursor.execute("SELECT id, date FROM stock_transactions")
             rows = self.cursor.fetchall()
@@ -230,22 +234,20 @@ class StockManager:
             self.conn.rollback()
 
     def get_balance(self, user_id):
-        """Calculate current balance for a user."""
         try:
             self.cursor.execute("SELECT initial_balance FROM users WHERE id=%s", (user_id,))
-            initial_balance = self.cursor.fetchone()[0] or 0.0
+            initial_balance = self.cursor.fetchone()[0] or Decimal('0.0')
             self.cursor.execute("SELECT SUM(amount) FROM expenses WHERE user_id=%s AND type='income'", (user_id,))
-            income = self.cursor.fetchone()[0] or 0.0
+            income = self.cursor.fetchone()[0] or Decimal('0.0')
             self.cursor.execute("SELECT SUM(amount) FROM expenses WHERE user_id=%s AND type='expense'", (user_id,))
-            expense = self.cursor.fetchone()[0] or 0.0
-            return initial_balance + income - expense
+            expense = self.cursor.fetchone()[0] or Decimal('0.0')
+            return float(initial_balance) + float(income) - float(expense)
         except psycopg2.Error as e:
             print(f"{Fore.RED}Error calculating balance: {e}{Style.RESET_ALL}")
             self.conn.rollback()
             return 0.0
 
     def stock_menu(self, user_id, full_name):
-        """Display and handle stock management menu."""
         while True:
             print(f"\n--- Stock Management for {full_name} ---")
             print("1. Buy Stock")

@@ -3,6 +3,7 @@ from tabulate import tabulate
 from utils import validate_date, get_valid_number, select_category, review_and_confirm, format_currency, confirm_action
 from colorama import Fore, Style
 import psycopg2
+from decimal import Decimal 
 
 class ExpenseManager:
     def __init__(self, db_conn):
@@ -173,7 +174,8 @@ class ExpenseManager:
         """Display all transactions for a user."""
         try:
             self.cursor.execute("SELECT initial_balance FROM users WHERE id=%s", (user_id,))
-            initial_balance = self.cursor.fetchone()[0] or 0.0
+            initial_balance = self.cursor.fetchone()[0] or Decimal('0.0')
+            initial_balance = float(initial_balance)
 
             self.cursor.execute("SELECT id, name, category, amount, type, date FROM expenses WHERE user_id=%s ORDER BY id", (user_id,))
             rows = self.cursor.fetchall()
@@ -186,6 +188,7 @@ class ExpenseManager:
 
             for row in rows:
                 trans_id, name, category, amount, trans_type, date = row
+                amount = float(amount)
                 income = format_currency(amount) if trans_type == 'income' else ""
                 expense = format_currency(amount) if trans_type == 'expense' else ""
                 running_balance += amount if trans_type == 'income' else -amount
@@ -218,16 +221,19 @@ class ExpenseManager:
         """Display monthly summary of transactions."""
         try:
             self.cursor.execute("SELECT initial_balance FROM users WHERE id=%s", (user_id,))
-            initial_balance = self.cursor.fetchone()[0] or 0.0
+            initial_balance = self.cursor.fetchone()[0] or Decimal('0.0')
+            initial_balance = float(initial_balance)
 
+            # Fixed: GROUP BY and ORDER BY use the same expression
             self.cursor.execute("""
-                SELECT to_char(to_date(date, 'DD-MM-YYYY'), 'MM-YYYY') as month,
-                       SUM(CASE WHEN type='income' THEN amount ELSE 0 END) as total_income,
-                       SUM(CASE WHEN type='expense' THEN amount ELSE 0 END) as total_expense
+                SELECT 
+                    to_char(to_date(date, 'DD-MM-YYYY'), 'MM-YYYY') as month,
+                    SUM(CASE WHEN type='income' THEN amount ELSE 0 END) as total_income,
+                    SUM(CASE WHEN type='expense' THEN amount ELSE 0 END) as total_expense
                 FROM expenses
                 WHERE user_id=%s
                 GROUP BY to_char(to_date(date, 'DD-MM-YYYY'), 'MM-YYYY')
-                ORDER BY to_date(date, 'DD-MM-YYYY')
+                ORDER BY to_date(to_char(to_date(date, 'DD-MM-YYYY'), 'MM-YYYY'), 'MM-YYYY')
             """, (user_id,))
             rows = self.cursor.fetchall()
 
@@ -239,8 +245,8 @@ class ExpenseManager:
             table = [["Month", "Total Income", "Total Expense", "Net Balance"]]
             running_balance = initial_balance
             for month, income, expense in rows:
-                income = income or 0.0
-                expense = expense or 0.0
+                income = float(income or 0.0)
+                expense = float(expense or 0.0)
                 running_balance += (income - expense)
                 table.append([
                     month,
@@ -257,12 +263,13 @@ class ExpenseManager:
         """Calculate current balance for a user."""
         try:
             self.cursor.execute("SELECT initial_balance FROM users WHERE id=%s", (user_id,))
-            initial_balance = self.cursor.fetchone()[0] or 0.0
+            initial_balance = self.cursor.fetchone()[0] or Decimal('0.0')
             self.cursor.execute("SELECT SUM(amount) FROM expenses WHERE user_id=%s AND type='income'", (user_id,))
-            income = self.cursor.fetchone()[0] or 0.0
+            income = self.cursor.fetchone()[0] or Decimal('0.0')
             self.cursor.execute("SELECT SUM(amount) FROM expenses WHERE user_id=%s AND type='expense'", (user_id,))
-            expense = self.cursor.fetchone()[0] or 0.0
-            return initial_balance + income - expense
+            expense = self.cursor.fetchone()[0] or Decimal('0.0')
+            
+            return float(initial_balance) + float(income) - float(expense)
         except psycopg2.Error as e:
             print(f"{Fore.RED}Error calculating balance: {e}{Style.RESET_ALL}")
             self.conn.rollback()
